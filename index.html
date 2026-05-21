@@ -724,16 +724,16 @@
           </div>`;
       }
 
-      async function logVisitor(data) {
+      async function logVisitor(geo) {
         if (!LOG_WEBHOOK) return;
+        // Normalised fields (ipinfo.io schema)
         const payload = {
-          timestamp: new Date().toISOString(),
-          ip:          data.query       || 'unknown',
-          country:     data.country     || 'unknown',
-          countryCode: data.countryCode || '--',
-          region:      data.regionName  || '',
-          city:        data.city        || '',
-          isp:         data.isp         || '',
+          timestamp:   new Date().toISOString(),
+          ip:          geo.ip       || 'unknown',
+          country:     geo.country  || 'unknown',   // 2-letter code, e.g. "ET"
+          region:      geo.region   || '',
+          city:        geo.city     || '',
+          org:         geo.org      || '',           // ISP / ASN
           referrer:    document.referrer || 'direct',
           userAgent:   navigator.userAgent,
           page:        location.href
@@ -741,8 +741,7 @@
 
         try {
           if (LOG_WEBHOOK.includes('discord.com')) {
-            // Discord embed format
-            const cc = data.countryCode || '';
+            const cc   = geo.country || '';
             const flag = cc.length === 2
               ? String.fromCodePoint(...[...cc].map(c => 0x1F1E6 - 65 + c.charCodeAt(0)))
               : '🌐';
@@ -754,18 +753,18 @@
                 embeds: [{
                   color: 0x6ba6ff,
                   fields: [
-                    { name: '🌍 Location', value: `${flag} ${data.city || '—'}, ${data.regionName || '—'}, ${data.country || '—'}`, inline: false },
-                    { name: '🔎 IP',       value: `\`${data.query || 'unknown'}\``, inline: true },
-                    { name: '📡 ISP',      value: data.isp || '—', inline: true },
+                    { name: '🌍 Location',   value: `${flag} ${geo.city || '—'}, ${geo.region || '—'} (${geo.country || '—'})`, inline: false },
+                    { name: '🔎 IP',         value: `\`${geo.ip || 'unknown'}\``, inline: true },
+                    { name: '📡 Org / ISP',  value: geo.org || '—', inline: true },
                     { name: '🕐 Time (UTC)', value: new Date().toUTCString(), inline: false },
-                    { name: '📄 Referrer', value: document.referrer || 'direct', inline: false }
+                    { name: '📄 Referrer',   value: document.referrer || 'direct', inline: false }
                   ],
                   footer: { text: navigator.userAgent.slice(0, 150) }
                 }]
               })
             });
           } else {
-            // Generic JSON POST — works with Google Apps Script and most webhooks
+            // Generic JSON POST — Google Apps Script, custom endpoint, etc.
             await fetch(LOG_WEBHOOK, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -776,27 +775,23 @@
       }
 
       try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 4000);
-        const res = await fetch(
-          'https://ip-api.com/json/?fields=status,country,countryCode,regionName,city,isp,query',
-          { signal: ctrl.signal }
-        );
-        clearTimeout(timer);
-        const data = await res.json();
+        const ctrl  = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
 
-        if (data.status === 'success') {
-          await logVisitor(data);
-          if (data.countryCode === 'ET') {
-            block();
-          } else {
-            reveal();
-          }
+        // ipinfo.io — free tier, HTTPS, no API key required, 50k req/month
+        const res  = await fetch('https://ipinfo.io/json', { signal: ctrl.signal });
+        clearTimeout(timer);
+        const geo  = await res.json();
+
+        await logVisitor(geo);
+
+        if ((geo.country || '').toUpperCase() === 'ET') {
+          block();
         } else {
-          reveal(); // API returned error — fail open
+          reveal();
         }
       } catch (_) {
-        reveal(); // timeout or network failure — fail open, never block real clients
+        reveal(); // timeout or network failure — always fail open
       }
     })();
     // ── END GEO GUARD ─────────────────────────────────────────────────────────
